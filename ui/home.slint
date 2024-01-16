@@ -1,0 +1,172 @@
+import { Button, VerticalBox , HorizontalBox, StandardButton, ScrollView} from "std-widgets.slint";
+import "./fonts/Comic_Sans_MS_Bold.ttf";
+
+export global HomeWindowFocus {
+    in-out property <string> focused-id;
+}
+
+component FocusableButton inherits Rectangle {
+    // For controller focus. Must be set.
+    in property <string> focus-id;
+
+    callback clicked <=> touch.clicked;
+    in-out property text <=> txt.text;
+
+    private property <bool> is-focused: HomeWindowFocus.focused-id == focus-id || touch.has-hover;
+    // Transparent bg with opacity change on focus.
+    background: is-focused ? #FFFFFF1F : #00000000;
+
+    height: txt.preferred-height * 1.33;
+    min-width: txt.preferred-width + 20px;
+    border-radius: 4px;
+
+    txt := Text {
+        x: (parent.width - self.width)/2 + (touch.pressed ? 2px : 0);
+        y: (parent.height - self.height)/2 + (touch.pressed ? 1px : 0);
+        color: touch.pressed ? #fff : #eee;
+    }
+    touch := TouchArea { }
+}
+
+component TopBarGrid inherits HorizontalLayout {
+
+    left := HorizontalLayout {
+        spacing: 5px;
+        alignment: start;
+        gamesBtn := FocusableButton {
+            text: "Games";
+            focus-id: "GAMES";
+        }
+        recentlyPlayedBtn := FocusableButton {
+            text: "Recently Played";
+            focus-id: "RECENTLY_PLAYED";
+        }
+        Rectangle {
+            horizontal-stretch: 5;
+        }
+    }
+
+    right := HorizontalLayout {
+        alignment: end;
+        spacing: 5px;
+        settingsBtn := FocusableButton {
+            text: "Settings";
+            focus-id: "SETTINGS";
+        }
+    }
+}
+
+struct GameData {
+    name: string
+}
+
+component GameDataDisplay inherits Rectangle {
+    in-out property <GameData> game;
+    private property <bool> is-focused: touch.has-hover;
+    // Transparent bg with opacity change on focus.
+    background: is-focused ? #FFFFFF1F : #00000000;
+    VerticalLayout {
+        x: (parent.width - self.width)/2 + (touch.pressed ? 2px : 0);
+        y: (parent.height - self.height)/2 + (touch.pressed ? 1px : 0);
+        alignment: center;
+        Rectangle {
+            width: 100%;
+            height: 90%;
+            background: white;
+            border-color: black;
+            border-width: 5px;
+        }
+        Text {
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            text: game.name;
+            color: white;
+            font-size: 25px;
+            overflow: elide;
+        }
+    }
+    touch := TouchArea { }
+}
+
+component GameDisplayScrollable inherits Flickable {
+    in-out property <[GameData]> games : [
+        {name: "bar" },
+        {name: "bar" },
+        {name: "baz" },
+        {name: "alpha" },
+        {name: "beta" },
+        {name: "gamma" },
+        {name: "sigma" },
+        {name: "delta" },
+        {name: "one" },
+        {name: "two" },
+        {name: "three" },
+        {name: "four" },
+        {name: "five" },
+        {name: "six" },
+        {name: "seven" },
+        {name: "alpha" },
+        {name: "beta" },
+        {name: "gamma" },
+        {name: "sigma" },
+        {name: "delta" },
+        {name: "one" },
+        {name: "two" },
+        {name: "three" },
+        {name: "four" },
+        {name: "five" },
+        {name: "six" },
+        {name: "longlongboilonglongboilonglongboilonglongboi" },
+    ];
+    // idk? 7 games per row?
+    private property <int> item-width: self.width / 1px / 7;
+    private property <int> item-height: root.height / 1px / 3;
+
+    viewport-height: games.length / 7 * item-height * 1px + 100px;
+    
+    for item[i] in games : GameDataDisplay {
+        game: item;
+        width: item-width * 1px;
+        height: item-height * 1px;
+        x: mod(i, 7) * item-width * 1px;
+        y: floor(i / 7) * item-height * 1px;
+    }
+}
+
+
+export component HomeWindow inherits Window {
+    default-font-family: "Comic Sans MS Bold";
+
+    bg := Rectangle {
+        width: 100%;
+        height: 100%;
+
+        Image {
+            source: @image-url("assets/anubis_bg.png");
+            width: 100%;
+            height: 100%;
+        }
+    }
+
+    // TODO: Properly support all resolutions.
+    width: 1920px;
+    height: 1080px;
+
+    display-area := Rectangle {
+        width: parent.width * 0.98;
+        height: parent.height * 0.98;
+        top-bar-grid := TopBarGrid { 
+            width: parent.width * 0.9;
+            height: parent.height * 0.03;
+            x: parent.width * 0.05;
+            y: parent.height * 0.02;
+        }
+        game-display-scrollable := GameDisplayScrollable {
+            height: parent.height * 0.9;
+            width: 90%;
+            x: parent.width * 0.05;
+            y: parent.height * 0.08;
+        }
+    }
+}
+
