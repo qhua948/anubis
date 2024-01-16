@@ -4,6 +4,9 @@ version = "0.0.1"
 authors = ["derg"]
 edition = "2021"
 build = "build.rs"
+description = "Game launcher for gaming consoles"
+repository = "https://github.com/qhua948/anubis"
+license = "GPL-3.0-or-later"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
