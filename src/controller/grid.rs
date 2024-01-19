@@ -3,12 +3,13 @@ use gilrs::Button;
 use std::{
     borrow::BorrowMut,
     collections::HashMap,
+    fmt::Display,
     sync::{Arc, Mutex, Weak},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Describes a rectangle, inclusive.
-struct Rect {
+pub struct Rect {
     x_start: usize,
     x_end: usize,
     y_start: usize,
@@ -16,7 +17,7 @@ struct Rect {
 }
 
 impl Rect {
-    fn new(x_start: usize, x_end: usize, y_start: usize, y_end: usize) -> Result<Self> {
+    pub fn new(x_start: usize, x_end: usize, y_start: usize, y_end: usize) -> Result<Self> {
         if x_end < x_start || y_end < y_start {
             bail!("end must be greater or eq to start");
         }
@@ -62,13 +63,13 @@ impl Rect {
 
 /// A point on the grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct Point {
+pub struct Point {
     x: i32,
     y: i32,
 }
 
 impl Point {
-    fn add(&self, x: i32, y: i32) -> Self {
+    pub fn add(&self, x: i32, y: i32) -> Self {
         Point {
             x: self.x + x,
             y: self.y + y,
@@ -87,7 +88,7 @@ enum SpecialHandlerAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// For focus, we only handle these actions.
-enum Direction {
+pub enum Direction {
     Up,
     Down,
     Left,
@@ -182,7 +183,7 @@ where
 }
 
 #[derive(Debug, Clone)]
-struct LayoutGrid {
+pub struct LayoutGrid {
     grid: Grid2D<Arc<Mutex<GridItem>>>,
     layout_state: Option<Point>,
     special_handler: HashMap<Button, SpecialHandlerAction>,
@@ -201,9 +202,11 @@ pub enum GridItem {
 }
 
 #[derive(Debug, Clone)]
-enum NavigationDirective {
+pub enum NavigationDirective {
     Button(Button),
     Direction(Direction),
+    /// Noop directive for getting the state.
+    Noop,
 }
 
 #[derive(Debug, Clone)]
@@ -213,7 +216,7 @@ enum NavigateAcrossBundle {
 }
 
 #[derive(Debug, Clone)]
-enum NavigationResult {
+pub enum NavigationResult {
     /// Navigation within the layout.
     WithinLayout(FocusID),
     /// Navigation across some layout, can be multiple layouts.
@@ -261,9 +264,15 @@ impl LayoutGrid {
         // First, check if we are navigating out.
         if let NavigationDirective::Direction(d) = directive {
             // Set corner based on the direction.
-            let corner = match d {
-                Direction::Up | Direction::Left => self.current_item()?.1.top_left(),
-                Direction::Down | Direction::Right => self.current_item()?.1.bottom_right(),
+            let corner = match self.current_item() {
+                core::result::Result::Ok((_, rect)) => match d {
+                    Direction::Up | Direction::Left => rect.top_left(),
+                    Direction::Down | Direction::Right => rect.bottom_right(),
+                },
+                Err(_) => Point {
+                    x: self.layout_state.unwrap().x,
+                    y: self.layout_state.unwrap().y,
+                },
             };
 
             let (x_dir, y_dir) = d.as_dir_vector();
@@ -277,7 +286,7 @@ impl LayoutGrid {
             // element in the grid.
             // Check for element in a line:
             while self.grid.within_bounds(next.x, next.y) {
-                match self.try_navigate_to_loc(
+                match self.try_navigate_to_point(
                     next.x as usize,
                     next.y as usize,
                     directive.clone(),
@@ -298,20 +307,21 @@ impl LayoutGrid {
 
                 for dir in vec![dir_a, dir_b] {
                     let mut dir_point = next.add(dir.0 as i32, dir.1 as i32);
+
                     while self.grid.within_bounds(dir_point.x, dir_point.y) {
                         // Check what's at loc.
                         // Prohibits sublayout when doing sideway navigation.
                         match self.grid.at(dir_point.x as usize, dir_point.y as usize)? {
                             Some(item) => match *item.clone().lock().unwrap() {
                                 GridItem::Sublayout(..) => {
-                                    continue;
+                                    break;
                                 }
                                 _ => {}
                             },
                             None => {}
                         };
 
-                        match self.try_navigate_to_loc(
+                        match self.try_navigate_to_point(
                             dir_point.x as usize,
                             dir_point.y as usize,
                             directive.clone(),
@@ -330,12 +340,14 @@ impl LayoutGrid {
             return Ok(NavigationResult::NoNextItem);
         }
 
-        unreachable!();
+        // Noop directive.
+        let (focus_id, _) = self.current_item()?;
+        Ok(NavigationResult::WithinLayout(focus_id.to_owned()))
     }
 
     /// Try to navigate to a point.
     /// Returns Result<None> when the grid is empty at the point.
-    fn try_navigate_to_loc(
+    fn try_navigate_to_point(
         &mut self,
         x: usize,
         y: usize,
@@ -412,23 +424,21 @@ impl LayoutGrid {
                 // Calculate the out percentage.
                 let x_out = out_from.x as f64 / self.grid.x_size as f64;
                 let y_out = out_from.y as f64 / self.grid.y_size as f64;
-                return match g
-                    .lock()
-                    .unwrap()
-                    .navigate_into(NavigateAcrossBundle::NavigateToParent(
+                return match g.lock().unwrap().navigate_into(
+                    NavigateAcrossBundle::NavigateToParent(
                         (x_out, y_out),
                         directive,
                         self.layout_id.clone(),
-                    ))? {
-                        // Maps within layout to across layout.
-                        NavigationResult::WithinLayout(s) => Ok(
-                            NavigationResult::AcrossLayout(s,p),
-                        ),
-                        // Respect deeper navigation results.
-                        NavigationResult::AcrossLayout(s, w) => 
-                            Ok(NavigationResult::AcrossLayout(s, w)),
-                        NavigationResult::NoNextItem => Ok(NavigationResult::NoNextItem),
+                    ),
+                )? {
+                    // Maps within layout to across layout.
+                    NavigationResult::WithinLayout(s) => Ok(NavigationResult::AcrossLayout(s, p)),
+                    // Respect deeper navigation results.
+                    NavigationResult::AcrossLayout(s, w) => {
+                        Ok(NavigationResult::AcrossLayout(s, w))
                     }
+                    NavigationResult::NoNextItem => Ok(NavigationResult::NoNextItem),
+                };
             }
         }
         // No parents.
@@ -467,7 +477,11 @@ impl LayoutGrid {
                     }
                 }
                 // Check if we landed on something.
-                match self.try_navigate_to_loc(self.layout_state.unwrap().x as usize, self.layout_state.unwrap().y as usize, directive.clone())? {
+                match self.try_navigate_to_point(
+                    self.layout_state.unwrap().x as usize,
+                    self.layout_state.unwrap().y as usize,
+                    directive.clone(),
+                )? {
                     Some(r) => return Ok(r),
                     None => {}
                 }
@@ -480,7 +494,7 @@ impl LayoutGrid {
                 let y = self.grid.y_size * in_y as usize;
                 self.set_point(x, y)?;
                 // Check if we landed on something.
-                match self.try_navigate_to_loc(x, y, directive.clone())? {
+                match self.try_navigate_to_point(x, y, directive.clone())? {
                     Some(r) => return Ok(r),
                     None => {}
                 }
@@ -520,12 +534,12 @@ impl LayoutGridBuilder {
         }
     }
 
-    fn add_element(&mut self, rect: Rect, focus_id: FocusID) -> &mut Self {
+    pub fn add_element(&mut self, rect: Rect, focus_id: FocusID) -> &mut Self {
         self.rects.push((rect, focus_id));
         self
     }
 
-    fn with_sublayout<'a>(
+    pub fn with_sublayout<'a>(
         &'a mut self,
         rect: Rect,
         layout_id: LayoutID,
@@ -564,8 +578,6 @@ impl LayoutGridBuilder {
         for (sub_rect, sub_layout_id, sub_builder) in self.sublayouts {
             let sub_layout = sub_builder.build_sub(Some(Arc::downgrade(&this_layout_arc)))?;
 
-
-
             let e = Arc::new(Mutex::new(GridItem::Sublayout(sub_layout, sub_rect)));
 
             let mut ref_parent_layout = this_layout_arc.lock().unwrap();
@@ -584,20 +596,24 @@ impl LayoutGridBuilder {
 pub struct NavigationController {
     root_layout: Arc<Mutex<LayoutGrid>>,
     current_layout_ref: Weak<Mutex<LayoutGrid>>,
+    pub current_focus_id: Option<String>,
 }
 
 impl NavigationController {
-    fn new(root_layout: Arc<Mutex<LayoutGrid>>) -> Self {
+    pub fn new(root_layout: Arc<Mutex<LayoutGrid>>) -> Result<Self> {
         let mut ret = Self {
             root_layout: root_layout.clone(),
             current_layout_ref: Arc::downgrade(&root_layout),
+            current_focus_id: None,
         };
 
+        // Layout must have 0, 0 to be something as default.
         ret.root_layout.lock().unwrap().layout_state = Some(Point::default());
-        ret
+        ret.navigate(NavigationDirective::Noop)?;
+        Ok(ret)
     }
 
-    fn navigate(&mut self, directive: NavigationDirective) -> Result<NavigationResult> {
+    pub fn navigate(&mut self, directive: NavigationDirective) -> Result<NavigationResult> {
         match self
             .current_layout_ref
             .upgrade()
@@ -607,10 +623,12 @@ impl NavigationController {
             .navigate(directive)?
         {
             NavigationResult::WithinLayout(ref s) => {
+                self.current_focus_id = Some(s.to_owned());
                 Ok(NavigationResult::WithinLayout(s.to_owned()))
             }
             NavigationResult::AcrossLayout(ref s, sub) => {
                 self.current_layout_ref = sub.clone();
+                self.current_focus_id = Some(s.to_owned());
                 Ok(NavigationResult::AcrossLayout(s.to_owned(), sub))
             }
             NavigationResult::NoNextItem => Ok(NavigationResult::NoNextItem),
@@ -652,7 +670,7 @@ impl NavigationController {
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_matches::assert_matches, borrow::Borrow};
+    use std::assert_matches::assert_matches;
 
     use super::*;
 
@@ -728,16 +746,15 @@ mod tests {
 
     mod navigation_controller_test {
         use super::*;
-        use std::{assert_matches::assert_matches, borrow::Borrow};
 
         #[test]
         fn can_build_controller() {
-            NavigationController::new(nested_layout().unwrap());
+            let _ = NavigationController::new(nested_layout().unwrap()).unwrap();
         }
 
         #[test]
         fn navigation_right() {
-            let mut controller = NavigationController::new(nested_layout().unwrap());
+            let mut controller = NavigationController::new(nested_layout().unwrap()).unwrap();
             let mut res = controller
                 .navigate(NavigationDirective::Direction(Direction::Right))
                 .unwrap();
@@ -755,8 +772,8 @@ mod tests {
 
         #[test]
         fn navigation_into_sublayout() {
-            let mut controller = NavigationController::new(nested_layout().unwrap());
-            let mut res = controller
+            let mut controller = NavigationController::new(nested_layout().unwrap()).unwrap();
+            let res = controller
                 .navigate(NavigationDirective::Direction(Direction::Down))
                 .unwrap();
             if let NavigationResult::AcrossLayout(ref id, _) = res {
@@ -768,7 +785,7 @@ mod tests {
 
         #[test]
         fn navigation_into_sublayout_then_out() {
-            let mut controller = NavigationController::new(nested_layout().unwrap());
+            let mut controller = NavigationController::new(nested_layout().unwrap()).unwrap();
             let mut res = controller
                 .navigate(NavigationDirective::Direction(Direction::Down))
                 .unwrap();
