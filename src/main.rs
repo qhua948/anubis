@@ -1,7 +1,10 @@
+#![feature(assert_matches)]
 slint::include_modules!();
 
 use gilrs::{Button, Event, EventType, Gilrs};
 use std::thread;
+
+mod controller;
 
 
 fn controller_loop(handle: slint::Weak<HomeWindow>) {
@@ -29,7 +32,6 @@ fn controller_loop(handle: slint::Weak<HomeWindow>) {
 
 
 fn main() -> Result<(), slint::PlatformError> {
-
     let ui = HomeWindow::new()?;
 
     let handle = ui.as_weak();

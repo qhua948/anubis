@@ -2,14 +2,22 @@ import { Button, VerticalBox , HorizontalBox, StandardButton, ScrollView} from "
 import "./fonts/Comic_Sans_MS_Bold.ttf";
 
 export global HomeWindowFocus {
+    // Native code will update this string when controller/keyboard
+    // changes the focus.
     in-out property <string> focused-id;
+    // Each clickable/focusable items is given an ID,
+    // when touched/clicked, will invoke this callback.
+    // This is for handling UI events only, the same
+    // function can be dispatched via a controller button press
+    // for example.
+    callback on-focus-id-press(string);
 }
 
 component FocusableButton inherits Rectangle {
-    // For controller focus. Must be set.
+    // For controller focus. Must be set and unique.
+    // Naming scheme is: BTN@${ID}
     in property <string> focus-id;
 
-    callback clicked <=> touch.clicked;
     in-out property text <=> txt.text;
 
     private property <bool> is-focused: HomeWindowFocus.focused-id == focus-id || touch.has-hover;
@@ -25,7 +33,11 @@ component FocusableButton inherits Rectangle {
         y: (parent.height - self.height)/2 + (touch.pressed ? 1px : 0);
         color: touch.pressed ? #fff : #eee;
     }
-    touch := TouchArea { }
+    touch := TouchArea {
+        clicked => {
+            HomeWindowFocus.on-focus-id-press(focus-id);
+        }
+     }
 }
 
 component TopBarGrid inherits HorizontalLayout {
@@ -35,11 +47,11 @@ component TopBarGrid inherits HorizontalLayout {
         alignment: start;
         gamesBtn := FocusableButton {
             text: "Games";
-            focus-id: "GAMES";
+            focus-id: "BTN@GAMES";
         }
         recentlyPlayedBtn := FocusableButton {
             text: "Recently Played";
-            focus-id: "RECENTLY_PLAYED";
+            focus-id: "BTN@RECENTLY_PLAYED";
         }
         Rectangle {
             horizontal-stretch: 5;
@@ -51,18 +63,23 @@ component TopBarGrid inherits HorizontalLayout {
         spacing: 5px;
         settingsBtn := FocusableButton {
             text: "Settings";
-            focus-id: "SETTINGS";
+            focus-id: "BTN@SETTINGS";
         }
     }
 }
 
 struct GameData {
-    name: string
+    // Title of the game.
+    title: string,
+    // UUID given to the game.
+    // For controller focus. Must be set and unique.
+    uuid: string,
 }
 
 component GameDataDisplay inherits Rectangle {
     in-out property <GameData> game;
-    private property <bool> is-focused: touch.has-hover;
+    // Naming scheme is: GAME@${UUID}
+    private property <bool> is-focused: HomeWindowFocus.focused-id == "GAME@" + game.uuid || touch.has-hover;
     // Transparent bg with opacity change on focus.
     background: is-focused ? #FFFFFF1F : #00000000;
     VerticalLayout {
@@ -79,44 +96,46 @@ component GameDataDisplay inherits Rectangle {
         Text {
             vertical-alignment: center;
             horizontal-alignment: center;
-            text: game.name;
+            text: game.title;
             color: white;
             font-size: 25px;
             overflow: elide;
         }
     }
-    touch := TouchArea { }
+    touch := TouchArea { 
+        clicked => { HomeWindowFocus.on-focus-id-press(game.uuid) }
+    }
 }
 
 component GameDisplayScrollable inherits Flickable {
     in-out property <[GameData]> games : [
-        {name: "bar" },
-        {name: "bar" },
-        {name: "baz" },
-        {name: "alpha" },
-        {name: "beta" },
-        {name: "gamma" },
-        {name: "sigma" },
-        {name: "delta" },
-        {name: "one" },
-        {name: "two" },
-        {name: "three" },
-        {name: "four" },
-        {name: "five" },
-        {name: "six" },
-        {name: "seven" },
-        {name: "alpha" },
-        {name: "beta" },
-        {name: "gamma" },
-        {name: "sigma" },
-        {name: "delta" },
-        {name: "one" },
-        {name: "two" },
-        {name: "three" },
-        {name: "four" },
-        {name: "five" },
-        {name: "six" },
-        {name: "longlongboilonglongboilonglongboilonglongboi" },
+        {title: "bar" },
+        {title: "bar" },
+        {title: "baz" },
+        {title: "alpha" },
+        {title: "beta" },
+        {title: "gamma" },
+        {title: "sigma" },
+        {title: "delta" },
+        {title: "one" },
+        {title: "two" },
+        {title: "three" },
+        {title: "four" },
+        {title: "five" },
+        {title: "six" },
+        {title: "seven" },
+        {title: "alpha" },
+        {title: "beta" },
+        {title: "gamma" },
+        {title: "sigma" },
+        {title: "delta" },
+        {title: "one" },
+        {title: "two" },
+        {title: "three" },
+        {title: "four" },
+        {title: "five" },
+        {title: "six" },
+        {title: "longlongboilonglongboilonglongboilonglongboi" },
     ];
     // idk? 7 games per row?
     private property <int> item-width: self.width / 1px / 7;
