@@ -1,6 +1,14 @@
 import { Button, VerticalBox , HorizontalBox, StandardButton, ScrollView} from "std-widgets.slint";
 import "./fonts/Comic_Sans_MS_Bold.ttf";
 
+struct GameData {
+    // Title of the game.
+    title: string,
+    // UUID given to the game.
+    // For controller focus. Must be set and unique.
+    uuid: string,
+}
+
 export global HomeWindowFocus {
     // Native code will update this string when controller/keyboard
     // changes the focus.
@@ -11,6 +19,8 @@ export global HomeWindowFocus {
     // function can be dispatched via a controller button press
     // for example.
     callback on-focus-id-press(string);
+
+    in-out property <[GameData]> games;
 }
 
 component FocusableButton inherits Rectangle {
@@ -68,13 +78,6 @@ component TopBarGrid inherits HorizontalLayout {
     }
 }
 
-struct GameData {
-    // Title of the game.
-    title: string,
-    // UUID given to the game.
-    // For controller focus. Must be set and unique.
-    uuid: string,
-}
 
 component GameDataDisplay inherits Rectangle {
     in-out property <GameData> game;
@@ -108,7 +111,9 @@ component GameDataDisplay inherits Rectangle {
 }
 
 component GameDisplayScrollable inherits Flickable {
-    in-out property <[GameData]> games : [
+    in-out property <[GameData]> games <=> HomeWindowFocus.games;
+    /*
+    [
         {title: "bar" },
         {title: "bar" },
         {title: "baz" },
@@ -137,6 +142,7 @@ component GameDisplayScrollable inherits Flickable {
         {title: "six" },
         {title: "longlongboilonglongboilonglongboilonglongboi" },
     ];
+    */
     // idk? 7 games per row?
     private property <int> item-width: self.width / 1px / 7;
     private property <int> item-height: root.height / 1px / 3;

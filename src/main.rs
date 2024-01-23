@@ -1,6 +1,7 @@
 #![feature(assert_matches)]
 slint::include_modules!();
 
+use slint::Model;
 use gilrs::{Button, Event, EventType, Gilrs};
 use std::{sync::mpsc, thread};
 
@@ -31,6 +32,14 @@ fn controller_loop(tx: mpsc::Sender<Button>) {
 
 fn navigation_controller_thread(handle: slint::Weak<HomeWindow>, rx: mpsc::Receiver<Button>) {
     let mut controller = controller::create_home_window_controller().unwrap();
+    // TODO: Refactor grid navigation for games.
+    let sublayout = controller.get_sublayout_by_id("Home@Games").unwrap();
+    {
+        let binding = sublayout.upgrade().unwrap();
+        let mut b = binding.lock().unwrap();
+        b.insert_to_growable_grid("GAME@aaaa").unwrap();
+        b.insert_to_growable_grid("GAME@bbbb").unwrap();
+    }
     loop {
         match rx.recv() {
             Ok(b) => {
@@ -50,9 +59,10 @@ fn navigation_controller_thread(handle: slint::Weak<HomeWindow>, rx: mpsc::Recei
                     _ => Ok(controller::NavigationResult::NoNextItem),
                 }
                 .unwrap();
-                match controller.current_focus_id {
-                    Some(ref mut f_id) => {
+                match controller.get_current_focus_id() {
+                    Some(ref f_id) => {
                         let f_id_clone = f_id.clone();
+                        println!("fid {}", f_id);
                         handle
                             .upgrade_in_event_loop(move |e| {
                                 e.global::<HomeWindowFocus>()
@@ -70,6 +80,20 @@ fn navigation_controller_thread(handle: slint::Weak<HomeWindow>, rx: mpsc::Recei
 
 fn main() -> Result<(), slint::PlatformError> {
     let ui = HomeWindow::new()?;
+
+    let mut game_tiles: Vec<GameData> = ui.global::<HomeWindowFocus>().get_games().iter().collect();
+
+    game_tiles.push(GameData {
+        title: "aaaa".into(),
+        uuid: "aaaa".into(),
+    });
+    game_tiles.push(GameData {
+        title: "bbbb".into(),
+        uuid: "bbbb".into(),
+    });
+
+    let tiles_model = std::rc::Rc::new(slint::VecModel::from(game_tiles));
+    ui.global::<HomeWindowFocus>().set_games(tiles_model.into());
 
     let (tx, rx) = mpsc::channel();
 

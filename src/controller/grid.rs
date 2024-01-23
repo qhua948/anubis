@@ -3,7 +3,6 @@ use gilrs::Button;
 use std::{
     borrow::BorrowMut,
     collections::HashMap,
-    fmt::Display,
     sync::{Arc, Mutex, Weak},
 };
 
@@ -57,6 +56,16 @@ impl Rect {
         Point {
             x: self.x_end as i32,
             y: self.y_end as i32,
+        }
+    }
+
+    fn transpose(self) -> Self {
+        // Maybe do it in place?
+        Self {
+            x_start: self.y_start,
+            x_end: self.y_end,
+            y_start: self.y_start,
+            y_end: self.y_end,
         }
     }
 }
@@ -146,8 +155,48 @@ where
         })
     }
 
+    fn expand(&mut self, new_x_size: usize, new_y_size: usize) -> Result<()> {
+        if new_x_size < self.x_size {
+            bail!(
+                "new_x_size is smaller than the current x_size, which is {}",
+                self.x_size
+            );
+        }
+
+        if new_y_size < self.y_size {
+            bail!(
+                "new_y_size is smaller than the current y_size, which is {}",
+                self.y_size
+            );
+        }
+
+        let x_diff = new_x_size - self.x_size;
+        let y_diff = new_y_size - self.y_size;
+
+        // Expand x first.
+        for _ in 0..x_diff {
+            let mut y = Vec::new();
+            for _ in 0..new_y_size {
+                y.push(None);
+            }
+            self.grid.push(y);
+        }
+
+        // Then, for existing X, push Y Nones.
+        for x in 0..self.x_size {
+            for _ in 0..y_diff {
+                self.grid[x].push(None);
+            }
+        }
+        Ok(())
+    }
+
     fn within_bounds(&self, x: i32, y: i32) -> bool {
         !(x >= self.x_size as i32 || x < 0 || y >= self.y_size as i32 || y < 0)
+    }
+
+    fn within_bounds_point(&self, pt: Point) -> bool {
+        !(pt.x >= self.x_size as i32 || pt.x < 0 || pt.y >= self.y_size as i32 || pt.y < 0)
     }
 
     // Fill a rect area with item.
@@ -183,6 +232,24 @@ where
 }
 
 #[derive(Debug, Clone)]
+/// Defines the growing direction of a grid.
+pub enum GrowDirection {
+    /// Fill item from left -> right. Expand Y if full.
+    GrowX,
+    /// Fill item from top -> bottom. Expand X if full.
+    GrowY,
+}
+
+#[derive(Debug, Clone)]
+/// Defines the grow size and the direction for a grid.
+struct GrowConfig {
+    item_x: usize,
+    item_y: usize,
+    grow_direction: GrowDirection,
+    current_grow_point: Point,
+}
+
+#[derive(Debug, Clone)]
 pub struct LayoutGrid {
     grid: Grid2D<Arc<Mutex<GridItem>>>,
     layout_state: Option<Point>,
@@ -190,6 +257,7 @@ pub struct LayoutGrid {
     parent: Option<Weak<Mutex<LayoutGrid>>>,
     layout_id: LayoutID,
     sublayouts: HashMap<LayoutID, Weak<Mutex<GridItem>>>,
+    grow_config: Option<GrowConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -234,12 +302,133 @@ impl LayoutGrid {
             parent: None,
             layout_id: layout_id,
             sublayouts: HashMap::new(),
+            grow_config: None,
         })
     }
+
+    /// A new growable grid.
+    fn new_growable(
+        size_x: usize,
+        size_y: usize,
+        layout_id: LayoutID,
+        grow_x: usize,
+        grow_y: usize,
+        grow_dir: GrowDirection,
+    ) -> Result<Self> {
+        Ok(Self {
+            grow_config: Some(GrowConfig {
+                grow_direction: grow_dir,
+                item_x: grow_x,
+                item_y: grow_y,
+                current_grow_point: Point::default(),
+            }),
+            ..LayoutGrid::new(size_x, size_y, layout_id)?
+        })
+    }
+
+    fn is_growable(&self) -> bool {
+        self.grow_config.is_some()
+    }
+
+    fn get_sublayout_by_id(&self, id: &str) -> Result<Weak<Mutex<LayoutGrid>>> {
+        match self.sublayouts.get(id) {
+            Some(i) => {
+                match *i.upgrade().unwrap().lock().unwrap() {
+                    GridItem::Element(..) => bail!("unexpected element when getting layout"),
+                    GridItem::Sublayout(ref s, r) => Ok(Arc::downgrade(s)),
+                }
+            }
+            None => bail!("No sublayout {} found", id),
+        }
+    }
+
+    /// Grow the grid, assuming the config is correct.
+    pub fn insert_to_growable_grid(&mut self, focus_id: &str) -> Result<()> {
+        println!("insert {}", focus_id);
+        if let Some(ref mut gc) = self.grow_config {
+            // Use the rect from the grow config.
+            // First, calculate the points.
+            // We expect the total grid size is a mutiple of the rect in the growing direction.
+
+            // We either have to:
+            // 1. Add the item to the next available place in the grow direction.
+            // 2. Shift in the non-growing direction because the row/col is full.
+            //    Which might mean we have to expand the underlying Grid2D.
+            let mut new_rect = match gc.grow_direction {
+                GrowDirection::GrowX => Rect::new(
+                    gc.current_grow_point.x as usize,
+                    gc.current_grow_point.x as usize + gc.item_x - 1,
+                    gc.current_grow_point.y as usize,
+                    gc.current_grow_point.y as usize,
+                )?,
+                GrowDirection::GrowY => Rect::new(
+                    gc.current_grow_point.x as usize,
+                    gc.current_grow_point.x as usize,
+                    gc.current_grow_point.y as usize,
+                    gc.current_grow_point.y as usize + gc.item_y - 1,
+                )?,
+            };
+
+            if !self.grid.within_bounds_point(new_rect.top_left()) {
+                // Regardless, we have to start in a diff row/col.
+                new_rect = match gc.grow_direction {
+                    GrowDirection::GrowX => Rect::new(
+                        0,
+                        gc.item_x,
+                        gc.current_grow_point.y as usize,
+                        gc.current_grow_point.y as usize + gc.item_y,
+                    )?,
+                    GrowDirection::GrowY => Rect::new(
+                        gc.current_grow_point.x as usize,
+                        gc.current_grow_point.x as usize + gc.item_x,
+                        0,
+                        gc.item_y,
+                    )?,
+                };
+                if !self.grid.within_bounds_point(new_rect.top_left()) {
+                    // If we are still OOB, then it means we need to grow by 1 unit in the direction.
+                    match gc.grow_direction {
+                        GrowDirection::GrowX => {
+                            self.grid
+                                .expand(self.grid.x_size, self.grid.y_size + gc.item_y)?;
+                        }
+                        GrowDirection::GrowY => {
+                            self.grid
+                                .expand(self.grid.x_size + gc.item_x, self.grid.y_size)?;
+                        }
+                    }
+                }
+            }
+
+            // Finally, fill the rect.
+            let item = Arc::new(Mutex::new(GridItem::Element(focus_id.to_owned(), new_rect)));
+            println!("fill {:?}", new_rect);
+            self.grid.fill(new_rect, item.clone())?;
+
+            println!("grid has {:?}", self.grid.at(0, 0));
+            // Update our current pos.
+            match gc.grow_direction {
+                GrowDirection::GrowX => {
+                    gc.current_grow_point.x = new_rect.x_end as i32 + 1;
+                    gc.current_grow_point.y = new_rect.y_end as i32;
+                }
+                GrowDirection::GrowY => {
+                    gc.current_grow_point.x = new_rect.x_end as i32;
+                    gc.current_grow_point.y = new_rect.y_end as i32 + 1;
+                }
+            }
+
+            Ok(())
+        } else {
+            bail!("no grow_config set for layoutId {}", self.layout_id)
+        }
+    }
+
     /// Process a NavigationDirective and returns the next FocusID, with a
     /// weak reference to the next LayoutGrid.
     fn navigate(&mut self, directive: NavigationDirective) -> Result<NavigationResult> {
         // Check for special handler first.
+        println!("navigation {:?}", self.layout_state);
         if let NavigationDirective::Button(b) = directive {
             if let Some(action) = self.special_handler.get(&b) {
                 match action {
@@ -353,6 +542,11 @@ impl LayoutGrid {
         y: usize,
         directive: NavigationDirective,
     ) -> Result<Option<NavigationResult>> {
+        println!(
+            "try navigate to {}, {}, {:?}, {}",
+            x, y, directive, self.layout_id
+        );
+        println!("- x y has {:?}", self.grid.at(x, y));
         match self.grid.at(x, y)? {
             Some(item) => match *item.clone().lock().unwrap() {
                 GridItem::Element(ref focus_id, _) => {
@@ -449,6 +643,10 @@ impl LayoutGrid {
     fn navigate_into(&mut self, bundle: NavigateAcrossBundle) -> Result<NavigationResult> {
         // Two possible cases, either we are navigating to parent, or
         // we are navigating to child.
+        println!(
+            "navigate into {:?}, id: {}, grid: {:?}",
+            bundle, self.layout_id, self.grid
+        );
 
         match bundle {
             // For child -> parent, child need to report the position it came out of
@@ -490,16 +688,17 @@ impl LayoutGrid {
             }
             // For parent -> child, parent need to tell the child the location of entry.
             NavigateAcrossBundle::NavigateToChild((in_x, in_y), directive) => {
-                let x = self.grid.x_size * in_x as usize;
-                let y = self.grid.y_size * in_y as usize;
+                let x = (self.grid.x_size-1) * in_x as usize;
+                let y = (self.grid.y_size-1) * in_y as usize;
                 self.set_point(x, y)?;
                 // Check if we landed on something.
                 match self.try_navigate_to_point(x, y, directive.clone())? {
                     Some(r) => return Ok(r),
-                    None => {}
+                    None => {
+                        // If not, process the directive again within the child.
+                        self.navigate(directive)
+                    }
                 }
-                // If not, process the directive again within the child.
-                self.navigate(directive)
             }
         }
     }
@@ -513,6 +712,7 @@ pub struct LayoutGridBuilder {
     sublayouts: Vec<(Rect, LayoutID, LayoutGridBuilder)>,
     layout_id: LayoutID,
     is_root_builder: bool,
+    growable_config: Option<(usize, usize, GrowDirection)>,
 }
 
 impl LayoutGridBuilder {
@@ -524,6 +724,7 @@ impl LayoutGridBuilder {
             sublayouts: vec![],
             layout_id,
             is_root_builder: true,
+            growable_config: None,
         }
     }
 
@@ -534,9 +735,25 @@ impl LayoutGridBuilder {
         }
     }
 
-    pub fn add_element(&mut self, rect: Rect, focus_id: FocusID) -> &mut Self {
+    pub fn set_growable(
+        &mut self,
+        size_x: usize,
+        size_y: usize,
+        dir: GrowDirection,
+    ) -> Result<&mut Self> {
+        if !self.rects.is_empty() {
+            bail!("can't set growable when elements are added");
+        }
+        self.growable_config = Some((size_x, size_y, dir));
+        Ok(self)
+    }
+
+    pub fn add_element(&mut self, rect: Rect, focus_id: FocusID) -> Result<&mut Self> {
+        if self.growable_config.is_some() {
+            bail!("can't add when elements are added, instead, call the grow_element method on the controller");
+        }
         self.rects.push((rect, focus_id));
-        self
+        Ok(self)
     }
 
     pub fn with_sublayout<'a>(
@@ -563,7 +780,13 @@ impl LayoutGridBuilder {
     }
 
     fn build_sub(self, parent: Option<Weak<Mutex<LayoutGrid>>>) -> Result<Arc<Mutex<LayoutGrid>>> {
-        let mut this_layout = LayoutGrid::new(self.size_x, self.size_y, self.layout_id)?;
+        let mut this_layout = match self.growable_config {
+            Some((x, y, dir)) => {
+                LayoutGrid::new_growable(self.size_x, self.size_y, self.layout_id, x, y, dir)?
+            }
+            None => LayoutGrid::new(self.size_x, self.size_y, self.layout_id)?,
+        };
+
         // Set parent.
         if let Some(ref parent_ref) = parent {
             this_layout.parent = Some(parent_ref.clone());
@@ -592,11 +815,10 @@ impl LayoutGridBuilder {
         Ok(this_layout_arc)
     }
 }
-
 pub struct NavigationController {
     root_layout: Arc<Mutex<LayoutGrid>>,
     current_layout_ref: Weak<Mutex<LayoutGrid>>,
-    pub current_focus_id: Option<String>,
+    current_focus_id: Option<String>,
 }
 
 impl NavigationController {
@@ -611,6 +833,24 @@ impl NavigationController {
         ret.root_layout.lock().unwrap().layout_state = Some(Point::default());
         ret.navigate(NavigationDirective::Noop)?;
         Ok(ret)
+    }
+
+    pub fn get_sublayout_by_id(&self, id: &str) -> Result<Weak<Mutex<LayoutGrid>>> {
+        // Search down the tree? Really, I just want to keep a small ref to the layout I need.
+        return self.root_layout.lock().unwrap().get_sublayout_by_id(id);
+    }
+
+    pub fn get_current_focus_id(&self) -> &Option<String> {
+        &self.current_focus_id
+    }
+
+    pub fn insert_elem(&self, focus_id: &str) -> Result<()> {
+        self.current_layout_ref
+            .upgrade()
+            .ok_or(anyhow!("unexpected result when getting layout"))?
+            .lock()
+            .unwrap()
+            .insert_to_growable_grid(focus_id)
     }
 
     pub fn navigate(&mut self, directive: NavigationDirective) -> Result<NavigationResult> {
@@ -677,20 +917,20 @@ mod tests {
     fn simple_layout() -> Result<Arc<Mutex<LayoutGrid>>> {
         let mut builder = LayoutGridBuilder::new(10, 5, "L0".to_owned());
         builder
-            .add_element(Rect::new(0, 1, 0, 1)?, "0_alpha".to_owned())
-            .add_element(Rect::new(2, 2, 0, 1)?, "0_beta".to_owned());
+            .add_element(Rect::new(0, 1, 0, 1)?, "0_alpha".to_owned())?
+            .add_element(Rect::new(2, 2, 0, 1)?, "0_beta".to_owned())?;
         builder.build()
     }
 
     fn nested_layout() -> Result<Arc<Mutex<LayoutGrid>>> {
         let mut builder = LayoutGridBuilder::new(10, 5, "L0".to_owned());
         builder
-            .add_element(Rect::new(0, 1, 0, 1)?, "0_alpha".to_owned())
-            .add_element(Rect::new(2, 2, 0, 1)?, "0_beta".to_owned());
+            .add_element(Rect::new(0, 1, 0, 1)?, "0_alpha".to_owned())?
+            .add_element(Rect::new(2, 2, 0, 1)?, "0_beta".to_owned())?;
         builder
             .with_sublayout(Rect::new(0, 9, 2, 4)?, "L1".to_owned(), 7, 10)
-            .add_element(Rect::new(0, 0, 0, 9)?, "1_alpha".to_owned())
-            .add_element(Rect::new(1, 1, 0, 9)?, "1_beta".to_owned());
+            .add_element(Rect::new(0, 0, 0, 9)?, "1_alpha".to_owned())?
+            .add_element(Rect::new(1, 1, 0, 9)?, "1_beta".to_owned())?;
 
         builder.build()
     }
