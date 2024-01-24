@@ -6,6 +6,7 @@ use slint::Model;
 use std::{sync::mpsc, thread};
 
 mod controller;
+mod models;
 
 fn controller_loop(tx: mpsc::Sender<Button>) {
     let mut gilrs = Gilrs::new().unwrap();
