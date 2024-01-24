@@ -1,9 +1,8 @@
 use anyhow::{anyhow, bail, Ok, Result};
 use gilrs::Button;
+use log::debug;
 use std::{
-    borrow::BorrowMut,
-    collections::HashMap,
-    sync::{Arc, Mutex, Weak},
+    borrow::BorrowMut, collections::HashMap, ops::Deref, sync::{Arc, Mutex, Weak}
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,19 +331,20 @@ impl LayoutGrid {
 
     fn get_sublayout_by_id(&self, id: &str) -> Result<Weak<Mutex<LayoutGrid>>> {
         match self.sublayouts.get(id) {
-            Some(i) => {
-                match *i.upgrade().unwrap().lock().unwrap() {
-                    GridItem::Element(..) => bail!("unexpected element when getting layout"),
-                    GridItem::Sublayout(ref s, r) => Ok(Arc::downgrade(s)),
-                }
-            }
+            Some(i) => match *i.upgrade().unwrap().lock().unwrap() {
+                GridItem::Element(..) => bail!("unexpected element when getting layout"),
+                GridItem::Sublayout(ref s, r) => Ok(Arc::downgrade(s)),
+            },
             None => bail!("No sublayout {} found", id),
         }
     }
 
     /// Grow the grid, assuming the config is correct.
     pub fn insert_to_growable_grid(&mut self, focus_id: &str) -> Result<()> {
-        println!("insert {}", focus_id);
+        debug!(
+            "insert focus {} into layout id {}",
+            focus_id, self.layout_id
+        );
         if let Some(ref mut gc) = self.grow_config {
             // Use the rect from the grow config.
             // First, calculate the points.
@@ -402,10 +402,7 @@ impl LayoutGrid {
 
             // Finally, fill the rect.
             let item = Arc::new(Mutex::new(GridItem::Element(focus_id.to_owned(), new_rect)));
-            println!("fill {:?}", new_rect);
             self.grid.fill(new_rect, item.clone())?;
-
-            println!("grid has {:?}", self.grid.at(0, 0));
             // Update our current pos.
             match gc.grow_direction {
                 GrowDirection::GrowX => {
@@ -428,7 +425,10 @@ impl LayoutGrid {
     /// weak reference to the next LayoutGrid.
     fn navigate(&mut self, directive: NavigationDirective) -> Result<NavigationResult> {
         // Check for special handler first.
-        println!("navigation {:?}", self.layout_state);
+        debug!(
+            "navigate with directive {:?}, current state {:?}",
+            directive, self.layout_state
+        );
         if let NavigationDirective::Button(b) = directive {
             if let Some(action) = self.special_handler.get(&b) {
                 match action {
@@ -542,11 +542,10 @@ impl LayoutGrid {
         y: usize,
         directive: NavigationDirective,
     ) -> Result<Option<NavigationResult>> {
-        println!(
-            "try navigate to {}, {}, {:?}, {}",
+        debug!(
+            "try navigate to x{}, y{}, with {:?}, layout_id {}",
             x, y, directive, self.layout_id
         );
-        println!("- x y has {:?}", self.grid.at(x, y));
         match self.grid.at(x, y)? {
             Some(item) => match *item.clone().lock().unwrap() {
                 GridItem::Element(ref focus_id, _) => {
@@ -643,9 +642,9 @@ impl LayoutGrid {
     fn navigate_into(&mut self, bundle: NavigateAcrossBundle) -> Result<NavigationResult> {
         // Two possible cases, either we are navigating to parent, or
         // we are navigating to child.
-        println!(
-            "navigate into {:?}, id: {}, grid: {:?}",
-            bundle, self.layout_id, self.grid
+        debug!(
+            "navigate into with bundle {:?}, layout id: {}",
+            bundle, self.layout_id
         );
 
         match bundle {
@@ -688,8 +687,8 @@ impl LayoutGrid {
             }
             // For parent -> child, parent need to tell the child the location of entry.
             NavigateAcrossBundle::NavigateToChild((in_x, in_y), directive) => {
-                let x = (self.grid.x_size-1) * in_x as usize;
-                let y = (self.grid.y_size-1) * in_y as usize;
+                let x = (self.grid.x_size - 1) * in_x as usize;
+                let y = (self.grid.y_size - 1) * in_y as usize;
                 self.set_point(x, y)?;
                 // Check if we landed on something.
                 match self.try_navigate_to_point(x, y, directive.clone())? {
@@ -838,6 +837,17 @@ impl NavigationController {
     pub fn get_sublayout_by_id(&self, id: &str) -> Result<Weak<Mutex<LayoutGrid>>> {
         // Search down the tree? Really, I just want to keep a small ref to the layout I need.
         return self.root_layout.lock().unwrap().get_sublayout_by_id(id);
+    }
+
+    pub fn with_sublayout<F, T>(&self, id: &str, f: F ) -> Result<T> where F: FnOnce(&mut LayoutGrid) -> T {
+        let s = self.get_sublayout_by_id(id)?.upgrade();
+        match s {
+            Some(l) =>  {
+                let mut b = l.lock().unwrap();
+                Ok(f(b.borrow_mut()))
+            }
+            None => bail!("Layout ref not found"),
+        }
     }
 
     pub fn get_current_focus_id(&self) -> &Option<String> {

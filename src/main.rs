@@ -1,8 +1,8 @@
 #![feature(assert_matches)]
 slint::include_modules!();
 
-use slint::Model;
 use gilrs::{Button, Event, EventType, Gilrs};
+use slint::Model;
 use std::{sync::mpsc, thread};
 
 mod controller;
@@ -21,9 +21,7 @@ fn controller_loop(tx: mpsc::Sender<Button>) {
             println!("{:?} New event from {}: {:?}", time, id, event);
             active_gamepad = Some(id);
             match event {
-                EventType::ButtonPressed(b, _) => {
-                    tx.send(b).unwrap()
-                } 
+                EventType::ButtonPressed(b, _) => tx.send(b).unwrap(),
                 _ => (),
             }
         }
@@ -33,13 +31,10 @@ fn controller_loop(tx: mpsc::Sender<Button>) {
 fn navigation_controller_thread(handle: slint::Weak<HomeWindow>, rx: mpsc::Receiver<Button>) {
     let mut controller = controller::create_home_window_controller().unwrap();
     // TODO: Refactor grid navigation for games.
-    let sublayout = controller.get_sublayout_by_id("Home@Games").unwrap();
-    {
-        let binding = sublayout.upgrade().unwrap();
-        let mut b = binding.lock().unwrap();
-        b.insert_to_growable_grid("GAME@aaaa").unwrap();
-        b.insert_to_growable_grid("GAME@bbbb").unwrap();
-    }
+    controller.with_sublayout("Home@Games", |l| {
+        l.insert_to_growable_grid("GAME@aaaa").unwrap();
+        l.insert_to_growable_grid("GAME@bbbb").unwrap();
+    }).unwrap();
     loop {
         match rx.recv() {
             Ok(b) => {
@@ -62,7 +57,6 @@ fn navigation_controller_thread(handle: slint::Weak<HomeWindow>, rx: mpsc::Recei
                 match controller.get_current_focus_id() {
                     Some(ref f_id) => {
                         let f_id_clone = f_id.clone();
-                        println!("fid {}", f_id);
                         handle
                             .upgrade_in_event_loop(move |e| {
                                 e.global::<HomeWindowFocus>()
@@ -70,7 +64,7 @@ fn navigation_controller_thread(handle: slint::Weak<HomeWindow>, rx: mpsc::Recei
                             })
                             .unwrap();
                     }
-                    None => {},
+                    None => {}
                 }
             }
             Err(_) => {} // TODO: Handle error.
